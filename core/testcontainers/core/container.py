@@ -1,6 +1,7 @@
 import contextlib
 from platform import system
 from socket import socket
+from time import sleep
 from typing import TYPE_CHECKING, Optional
 
 import docker.errors
@@ -50,6 +51,7 @@ class DockerContainer:
         self._network: Optional[Network] = None
         self._network_aliases: Optional[list[str]] = None
         self._kwargs = kwargs
+        self._dependencies: list[DockerContainer] = []
 
     def with_env(self, key: str, value: str) -> Self:
         self.env[key] = value
@@ -81,13 +83,29 @@ class DockerContainer:
             return self.with_kwargs(platform="linux/amd64")
         return self
 
+    def depends_on(self, container) -> Self:
+        self._dependencies.append(container)
+        return self
+
     def start(self) -> Self:
         if not c.ryuk_disabled and self.image != c.ryuk_image:
             logger.debug("Creating Ryuk container")
             Reaper.get_instance()
+
+        for dependency in self._dependencies:
+            while True:
+                logger.info(f"Waiting for container: {dependency._container.name}")
+
+                if dependency.is_running:
+                    logger.info(f"Container already running: {dependency._container.name}")
+                    break
+                else:
+                    sleep(5)
+
         logger.info("Pulling image %s", self.image)
         docker_client = self.get_docker_client()
         self._configure()
+
         self._container = docker_client.run(
             self.image,
             command=self._command,
@@ -180,6 +198,11 @@ class DockerContainer:
     def _configure(self) -> None:
         # placeholder if subclasses want to define this and use the default start method
         pass
+
+    @property
+    def is_running(self):
+        self._container.reload()
+        return self._container.attrs['State']['Running']
 
 
 class Reaper:
